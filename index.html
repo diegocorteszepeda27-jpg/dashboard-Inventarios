@@ -1,0 +1,154 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <title>Dashboard Inventarios</title>
+  <script src="https://cdn.jsdelivr.net/npm/xlsx/dist/xlsx.full.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <style>
+    body { font-family: Arial; margin: 20px; background: #f9f9f9; }
+    .card { border: 1px solid #ccc; padding: 15px; margin: 10px; border-radius: 8px; background: #fff; }
+    h1 { color: #333; }
+    .ok { color: green; font-weight: bold; }
+    .fail { color: red; font-weight: bold; }
+    canvas { margin-top: 20px; }
+    select, button { margin: 5px; padding: 5px; }
+  </style>
+</head>
+<body>
+  <h1>Dashboard Inventarios</h1>
+  <input type="file" id="uploadExcel" />
+  <select id="filterSucursal"></select>
+  <select id="filterFecha"></select>
+  <button onclick="updateDashboard()">Actualizar</button>
+
+  <!-- KPIs -->
+  <div class="card">
+    <h2>Diferencia de Inventario</h2>
+    <p id="kpiDif"></p>
+  </div>
+  <div class="card">
+    <h2>Confiabilidad de Inventario</h2>
+    <p id="kpiConf"></p>
+  </div>
+  <div class="card">
+    <h2>Mermas</h2>
+    <p id="kpiMermas"></p>
+  </div>
+  <div class="card">
+    <h2>Vencidos</h2>
+    <p id="kpiVencidos"></p>
+  </div>
+
+  <!-- OKR -->
+  <div class="card">
+    <h2>OKR</h2>
+    <ul id="okrList"></ul>
+  </div>
+
+  <!-- Gráficos -->
+  <canvas id="chartKPIs"></canvas>
+  <canvas id="chartFechas"></canvas>
+
+  <script>
+    let globalData = [];
+
+    document.getElementById('uploadExcel').addEventListener('change', handleFile);
+
+    function handleFile(e) {
+      const file = e.target.files[0];
+      const reader = new FileReader();
+      reader.onload = function(evt) {
+        const data = new Uint8Array(evt.target.result);
+        const workbook = XLSX.read(data, {type: 'array'});
+        const sheet = workbook.Sheets[workbook.SheetNames[0]];
+        globalData = XLSX.utils.sheet_to_json(sheet);
+
+        // Poblar filtros
+        let sucursales = [...new Set(globalData.map(r => r["SUCURSAL"]))];
+        let fechas = [...new Set(globalData.map(r => r["Fecha"]))];
+
+        let sucSelect = document.getElementById('filterSucursal');
+        let fechaSelect = document.getElementById('filterFecha');
+        sucSelect.innerHTML = "<option value=''>Todas</option>";
+        fechaSelect.innerHTML = "<option value=''>Todas</option>";
+
+        sucursales.forEach(s => sucSelect.innerHTML += `<option value="${s}">${s}</option>`);
+        fechas.forEach(f => fechaSelect.innerHTML += `<option value="${f}">${f}</option>`);
+
+        updateDashboard();
+      };
+      reader.readAsArrayBuffer(file);
+    }
+
+    function updateDashboard() {
+      let sucursal = document.getElementById('filterSucursal').value;
+      let fecha = document.getElementById('filterFecha').value;
+
+      let filtered = globalData.filter(r => 
+        (sucursal === "" || r["SUCURSAL"] === sucursal) &&
+        (fecha === "" || r["Fecha"] === fecha)
+      );
+
+      if (filtered.length === 0) return;
+
+      // Calcular promedios
+      let dif = avg(filtered.map(r => parseFloat(r["% DE DIFERENCIA DE INVENTARIO"])));
+      let conf = avg(filtered.map(r => parseFloat(r["%  DE CONFIABILIDAD"])));
+      let merma = avg(filtered.map(r => parseFloat(r["% MERMA"])));
+      let vencidos = avg(filtered.map(r => parseFloat(r["% VENCIDOS"])));
+
+      // Validación corporativa
+      let difStatus = (dif <= -0.05 || dif >= 0.05) ? "✅ Cumple" : "❌ No cumple";
+      let confStatus = (conf >= 95) ? "✅ Cumple" : "❌ No cumple";
+      let mermaStatus = (merma <= 0.1) ? "✅ Cumple" : "❌ No cumple";
+      let vencidosStatus = (vencidos <= 0.1) ? "✅ Cumple" : "❌ No cumple";
+
+      document.getElementById('kpiDif').innerHTML = dif.toFixed(2) + "% - " + difStatus;
+      document.getElementById('kpiConf').innerHTML = conf.toFixed(2) + "% - " + confStatus;
+      document.getElementById('kpiMermas').innerHTML = merma.toFixed(2) + "% - " + mermaStatus;
+      document.getElementById('kpiVencidos').innerHTML = vencidos.toFixed(2) + "% - " + vencidosStatus;
+
+      // OKR dinámicos
+      let okrList = document.getElementById('okrList');
+      okrList.innerHTML = `
+        <li>Reducir mermas en 15% (${mermaStatus})</li>
+        <li>Mantener confiabilidad ≥ 97% (${confStatus})</li>
+        <li>Diferencia de inventario ≤ -0,05% o ≥ +0,05% (${difStatus})</li>
+        <li>Disminuir vencidos en 20% (${vencidosStatus})</li>
+      `;
+
+      // Gráfico KPIs
+      new Chart(document.getElementById('chartKPIs'), {
+        type: 'bar',
+        data: {
+          labels: ['Diferencia', 'Confiabilidad', 'Mermas', 'Vencidos'],
+          datasets: [{
+            label: 'KPIs (%)',
+            data: [dif, conf, merma, vencidos],
+            backgroundColor: ['red','blue','orange','green']
+          }]
+        }
+      });
+
+      // Gráfico comparativo por fecha
+      new Chart(document.getElementById('chartFechas'), {
+        type: 'line',
+        data: {
+          labels: filtered.map(r => r["Fecha"]),
+          datasets: [
+            { label: 'Diferencia', data: filtered.map(r => parseFloat(r["% DE DIFERENCIA DE INVENTARIO"])), borderColor: 'red', fill: false },
+            { label: 'Confiabilidad', data: filtered.map(r => parseFloat(r["%  DE CONFIABILIDAD"])), borderColor: 'blue', fill: false },
+            { label: 'Mermas', data: filtered.map(r => parseFloat(r["% MERMA"])), borderColor: 'orange', fill: false },
+            { label: 'Vencidos', data: filtered.map(r => parseFloat(r["% VENCIDOS"])), borderColor: 'green', fill: false }
+          ]
+        }
+      });
+    }
+
+    function avg(arr) {
+      return arr.reduce((a,b) => a+b, 0) / arr.length;
+    }
+  </script>
+</body>
+</html>
